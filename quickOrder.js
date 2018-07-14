@@ -22,14 +22,21 @@
         c = new Decimal(0.001),
         //买价买进2 卖价卖出2
         d = new Decimal(-0.001),
+        e = new Decimal(0.1),
         buy = new Decimal(0),
         sell = new Decimal(0),
         last = new Decimal(0),
         quick = false,
         trade = {},
-        order_id = '',
+        sign = '',
         apikey = "db79907d-ed4f-48e3-b2d4-d7938e05a5ef",
-        secret = "C371185FCC939A1BA90FA263CB6FA661";
+        secret = "C371185FCC939A1BA90FA263CB6FA661",
+        long_orderIds = [],
+        short_orderIds = [],
+        long_sell_orderIds = [],
+        short_buy_orderIds = [],
+        long_position_eveningup = '',
+        short_position_eveningup = '';
     //交易数量
     trade.amount = 1;
     //合约类型 this_week:当周 next_week:下周 quarter:季度
@@ -102,8 +109,35 @@
                 futureTrade(3, sell.plus(d));
             } else if (event.keyCode = 109) {
                 //撤平仓单
+                futureOrderInfo("-1");
+                //获取到订单id之后在执行
+                let timer = setInterval(function () {
+                    let orderIds = long_sell_orderIds.concat(short_buy_orderIds);
+                    console.log("获取订单信息" + orderIds);
+                    if (orderIds.length > 0) {
+                        futureCancelOrder(orderIds);
+                        clearInterval(timer);
+                    }
+                }, 100);
             } else if (event.keyCode = 107) {
-                //清仓
+                //先取消所有订单
+                futureOrderInfo("-1");
+                //获取到订单id之后在执行
+                let timer = setInterval(function () {
+                    let orderIds = long_sell_orderIds.concat(short_buy_orderIds).concat(long_orderIds).concat(short_orderIds);
+                    console.log("获取订单信息" + orderIds);
+                    if (orderIds.length > 0) {
+                        futureCancelOrder(orderIds);
+                        clearInterval(timer);
+                    }
+                    //多仓可平数量
+                    trade.amount = long_position_eveningup;
+                    futureTrade(3, last.plus(e));
+                    //空仓可平数量
+                    trade.amount = short_position_eveningup;
+                    futureTrade(4, last.plus(e));
+                }, 100);
+
             }
         }
     });
@@ -128,8 +162,8 @@
         okCoinWebSocket.websocket.onerror = function (evt) {
             onError(evt)
         };
-        //30s监测一次是否断开连接
-        //setInterval(checkConnect, 30000);
+        //5s监测一次是否断开连接
+        setInterval(checkConnect, 5000);
     }
 
     function checkConnect() {
@@ -141,9 +175,10 @@
     }
 
     function onOpen(evt) {
-        //doSend("{'event':'addChannel','channel':'ok_sub_futureusd_eos_ticker_quarter'}");
+        //订阅交易数据
+        doSend("{'event':'addChannel','channel':'ok_sub_futureusd_eos_ticker_quarter'}");
+        //登录
         login();
-        futureOrderInfo("-1");
     }
 
     function onClose(evt) {
@@ -151,7 +186,7 @@
     }
 
     function onMessage(e) {
-        console.log(new Date().getTime() + ": " + e.data)
+        // console.log(new Date().getTime() + ": " + e.data)
         var array = JSON.parse(e.data);
         if (array.length > 0) {
             let channel = array[0].channel;
@@ -166,6 +201,38 @@
                 } else if (channel === "ok_sub_futureusd_trades") {
                     console.log("交易数据")
                     console.log(e.data);
+                } else if (channel === "ok_futureusd_orderinfo") {
+                    //重置订单id
+                    long_orderIds = [];
+                    long_sell_orderIds = [];
+                    short_orderIds = [];
+                    short_buy_orderIds = [];
+                    let orders = array[0].data.orders;
+                    for (var i = 0; i < orders.length; i++) {
+                        if (orders[i].type == "1") {
+                            long_orderIds.push(orders[i].order_id);
+                        } else if (orders[i].type == "2") {
+                            short_orderIds.push(orders[i].order_id);
+                        } else if (orders[i] == "3") {
+                            long_sell_orderIds.push(orders[i].order_id);
+                        } else if (orders[i] == "4") {
+                            short_buy_orderIds.push(orders[i].order_id);
+                        }
+                    }
+                } else if (channel === "ok_futureusd_cancel_order") {
+                    console.log(e.data);
+                } else if (channel === "ok_sub_futureusd_positions") {
+                    let data = array[0].data.positions;
+                    console.log("持仓信息" + data);
+                    for (var i = 0; i < data.length; i++) {
+                        //多仓
+                        if (data[i].position == "1") {
+                            long_position_eveningup = data[i].eveningup;
+                            //空仓
+                        } else if (data[i].position == "2") {
+                            short_position_eveningup = data[i].eveningup;
+                        }
+                    }
                 }
             }
         }
@@ -235,7 +302,7 @@
 
     //现货下单
     function spotTrade() {
-        var sign = MD5("amount=0.1&api_key=" + apikey
+        sign = MD5("amount=0.1&api_key=" + apikey
             + "&symbol=ltc_usd&type=sell_market&secret_key=" + secret);
         doSend("{'event':'addChannel','channel':'ok_spotusd_trade','parameters':{'api_key':'" + apikey
             + "','sign':'" + sign + "','symbol':'ltc_usd','type':'sell_market','amount':0.1}}");
@@ -243,7 +310,7 @@
 
     //现货取消订单
     function spotCancelOrder(orderId) {
-        var sign = MD5("api_key=" + apikey + "&order_id=" + orderId
+        sign = MD5("api_key=" + apikey + "&order_id=" + orderId
             + "&symbol=ltc_usd&secret_key=" + secret);
         doSend("{'event':'addChannel','channel':'ok_spotusd_cancel_order','parameters':{'api_key':'" + apikey
             + "','sign':'" + sign + "','symbol':'ltc_usd','order_id':'" + orderId + "'}}");
@@ -251,35 +318,35 @@
 
     //现货个人信息
     function spotUserInfo() {
-        var sign = MD5("api_key=" + apikey + "&secret_key=" + secret);
+        sign = MD5("api_key=" + apikey + "&secret_key=" + secret);
         doSend("{'event':'addChannel','channel':'ok_spotusd_userinfo','parameters' :{'api_key':'"
             + apikey + "','sign':'" + sign + "'}}");
     }
 
     //查询订单信息
     function spotOrderInfo() {
-        var sign = MD5("api_key=" + apikey + "&order_id=20914907&secret_key=" + secret + "&symbol=ltc_usd");
+        sign = MD5("api_key=" + apikey + "&order_id=20914907&secret_key=" + secret + "&symbol=ltc_usd");
         doSend("{'event':'addChannel','channel':'ok_spotusd_orderinfo','parameters' :{'api_key':'"
             + apikey + "','symbol':'ltc_usd','order_id':'20914907','sign':'" + sign + "'}}");
     }
 
     //订阅交易数据
     function spotTrades() {
-        var sign = MD5("api_key=" + apikey + "&secret_key=" + secret);
+        sign = MD5("api_key=" + apikey + "&secret_key=" + secret);
         doSend("{'event':'addChannel','channel':'ok_sub_spotusd_trades','parameters' :{'api_key':'"
             + apikey + "','sign':'" + sign + "'}}");
     }
 
     //订阅账户信息
     function spotUserinfos() {
-        var sign = MD5("api_key=" + apikey + "&secret_key=" + secret);
+        sign = MD5("api_key=" + apikey + "&secret_key=" + secret);
         doSend("{'event':'addChannel','channel':'ok_sub_spotusd_userinfo','parameters' :{'api_key':'"
             + apikey + "','sign':'" + sign + "'}}");
     }
 
     //合约下单
     function futureTrade(type, price) {
-        var sign = MD5("amount=" + trade.amount + "&api_key=" + apikey +
+        sign = MD5("amount=" + trade.amount + "&api_key=" + apikey +
             "&contract_type=" + trade.contract_type + "&lever_rate=" + trade.lever_rate
             + "&match_price=0&price=" + price + "&symbol=" + trade.symbol + "&type=" + type + "&secret_key=" + secret);
         doSend("{'event': 'addChannel','channel':'ok_futureusd_trade','parameters': {'api_key': '"
@@ -289,17 +356,35 @@
     }
 
     //合约取消订单
-    function futureCancelOrder(orderId) {
-        var sign = MD5("api_key=" + apikey + "&contract_type=this_week&order_id=" + orderId
-            + "&symbol=ltc_usd&secret_key=" + secret);
-        doSend("{'event': 'addChannel','channel': 'ok_futureusd_cancel_order','parameters': {'api_key': '"
-            + apikey + "','sign': '" + sign + "','symbol': 'ltc_usd','order_id': '" + orderId
-            + "','contract_type': 'this_week'}}");
+    function futureCancelOrder(orderIds) {
+        let len = orderIds.length;
+        if (len > 5) {
+            //需要发送请求的次数
+            let times = Math.ceil(len / 5);
+            let i = 0;
+            let j = 0;
+            while (i < times) {
+                let arr = orderIds.slice(j, j + 5);
+                j += 5;
+                i++;
+                sign = MD5("api_key=" + apikey + "&contract_type=" + trade.contract_type + "&order_id=" + arr.join(",")
+                    + "&symbol=" + trade.symbol + "&secret_key=" + secret);
+                doSend("{'event': 'addChannel','channel': 'ok_futureusd_cancel_order','parameters': {'api_key': '"
+                    + apikey + "','sign': '" + sign + "','symbol': '" + trade.symbol + "','order_id': '" + arr.join(",")
+                    + "','contract_type': '" + trade.contract_type + "'}}");
+            }
+        } else if (0 < len <= 5) {
+            sign = MD5("api_key=" + apikey + "&contract_type=" + trade.contract_type + "&order_id=" + orderIds.join(",")
+                + "&symbol=" + trade.symbol + "&secret_key=" + secret);
+            doSend("{'event': 'addChannel','channel': 'ok_futureusd_cancel_order','parameters': {'api_key': '"
+                + apikey + "','sign': '" + sign + "','symbol': '" + trade.symbol + "','order_id': '" + orderIds.join(",")
+                + "','contract_type': '" + trade.contract_type + "'}}");
+        }
     }
 
     //合约个人信息
     function futureUserInfo() {
-        var sign = MD5("api_key=" + apikey + "&secret_key=" + secret);
+        sign = MD5("api_key=" + apikey + "&secret_key=" + secret);
         doSend("{'event':'addChannel','channel':'ok_futureusd_userinfo','parameters' :{'api_key':'"
             + apikey + "','sign':'" + sign + "'}}");
     }
@@ -308,7 +393,7 @@
     //订单ID -1:查询指定状态的订单，否则查询相应订单号的订单
     //status: 订单状态(0等待成交 1部分成交 2全部成交 -1撤单 4撤单处理中 5撤单中)
     function futureOrderInfo(orderId) {
-        var sign = MD5("api_key=" + apikey + "&contract_type=" + trade.contract_type + "&current_page=1&order_id=" + orderId
+        sign = MD5("api_key=" + apikey + "&contract_type=" + trade.contract_type + "&current_page=1&order_id=" + orderId
             + "&page_length=30&status=1&symbol=" + trade.symbol + "&secret_key=" + secret);
         console.log(sign)
         doSend("{'event': 'addChannel','channel': 'ok_futureusd_orderinfo','parameters': {'api_key': '"
@@ -316,26 +401,17 @@
             + "','contract_type': 'quarter','status':'1','current_page':'1','page_length':'30'}}");
     }
 
-    /*function futureOrderInfo(orderId) {
-        var sign = MD5("api_key=" + apikey + "&contract_type="+trade.contract_type+"&current_page=1&order_id=" + orderId
-            + "&page_length=30&symbol="+trade.symbol+"&secret_key=" + secret + "&status=1");
-        console.log("api_key=" + apikey + "&contract_type="+trade.contract_type+"&current_page=1&order_id=" + orderId
-            + "&page_length=30&symbol="+trade.symbol+"&secret_key=" + secret + "&status=1");
-        doSend("{'event': 'addChannel','channel': 'ok_futureusd_orderinfo','parameters': {'api_key': '"
-            + apikey + "','sign': '" + sign + "','symbol': '"+trade.symbol+"','order_id': '" + orderId
-            + "','contract_type': '"+trade.contract_type+"','status':'1','current_page':'1','page_length':'30'}}");
-    }*/
 
     //订阅合约交易数据
     function futureTrades() {
-        var sign = MD5("api_key=" + apikey + "&secret_key=" + secret);
+        sign = MD5("api_key=" + apikey + "&secret_key=" + secret);
         doSend("{'event':'addChannel','channel':'ok_sub_futureusd_trades','parameters' :{'api_key':'"
             + apikey + "','sign':'" + sign + "'}}");
     }
 
     //订阅合约账户信息
     function futureUserinfos() {
-        var sign = MD5("api_key=" + apikey + "&secret_key=" + secret);
+        sign = MD5("api_key=" + apikey + "&secret_key=" + secret);
         doSend("{'event':'addChannel','channel':'ok_sub_futureusd_userinfo','parameters' :{'api_key':'"
             + apikey + "','sign':'" + sign + "'}}");
     }
@@ -343,14 +419,14 @@
 
     //订阅合约持仓信息
     function futurePositions() {
-        var sign = MD5("api_key=" + apikey + "&secret_key=" + secret);
+        sign = MD5("api_key=" + apikey + "&secret_key=" + secret);
         doSend("{'event':'addChannel','channel':'ok_sub_futureusd_positions','parameters' :{'api_key':'"
             + apikey + "','sign':'" + sign + "'}}");
     }
 
     //订阅登录
     function login() {
-        var sign = MD5("api_key=" + apikey + "&secret_key=" + secret);
+        sign = MD5("api_key=" + apikey + "&secret_key=" + secret);
         doSend("{'event':'login','parameters':{'api_key':'" + apikey + "','sign':'" + sign + "'}}");
     }
 
