@@ -41,8 +41,8 @@
         amount_2 = 10,
         amount_3 = 20,
         amount_4 = 50,
-        api_key = "db79907d-ed4f-48e3-b2d4-d7938e05a5ef",    //api设置
-        api_secret = "C371185FCC939A1BA90FA263CB6FA661";
+        api_key = "",    //api设置
+        api_secret = "";
 
     function Trade(symbol, contract_type, price, amount, type, match_price, lever_rate) {
         //btc_usd ltc_usd eth_usd etc_usd bch_usd
